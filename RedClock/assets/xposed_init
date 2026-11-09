@@ -1,1 +1,35 @@
-de.robv.android.xposed.examples.redclock.RedClock
+package com.example.abibypass;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import de.robv.android.xposed.IXposedHookLoadPackage;
+import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XposedHelpers;
+import de.robv.android.xposed.callbacks.XC_LoadPackage;
+
+public class Hook implements IXposedHookLoadPackage {
+    @Override
+    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
+        if (!"android".equals(lpparam.packageName)) return;
+
+        XposedHelpers.findAndHookMethod(
+            "com.android.internal.content.NativeLibraryHelper",
+            lpparam.classLoader,
+            "findSupportedAbi",
+            "com.android.internal.content.NativeLibraryHelper$Handle",
+            String[].class,
+            new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    String[] abis = (String[]) param.args[1];
+                    if (abis == null) return;
+                    List<String> list = new ArrayList<>(Arrays.asList(abis));
+                    if (!list.contains("armeabi-v7a")) list.add("armeabi-v7a");
+                    if (!list.contains("armeabi")) list.add("armeabi");
+                    param.args[1] = list.toArray(new String[0]);
+                }
+            }
+        );
+    }
+}
