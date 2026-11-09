@@ -23,7 +23,7 @@ jobs:
 
           mkdir -p src/com/example/abibypass stubs/de/robv/android/xposed/callbacks assets res/values build/stubs build/app
 
-          # 1. Create compile-time Xposed API stubs (provided by LSPosed at runtime)
+          # 1. Create compile-time Xposed API stubs
           cat << 'EOF' > stubs/de/robv/android/xposed/IXposedHookLoadPackage.java
           package de.robv.android.xposed;
           import de.robv.android.xposed.callbacks.XC_LoadPackage;
@@ -69,6 +69,7 @@ jobs:
               package="com.example.abibypass"
               android:versionCode="1"
               android:versionName="1.0">
+              <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
               <application android:label="ABI Bypass" android:hasCode="true">
                   <meta-data android:name="xposedmodule" android:value="true" />
                   <meta-data android:name="xposeddescription" android:value="Bypass pm 32-bit ABI check" />
@@ -89,7 +90,7 @@ jobs:
 
           echo "com.example.abibypass.Hook" > assets/xposed_init
 
-          # 3. Write Hook.java (appends armeabi-v7a and armeabi to supportedAbis at param.args[1])
+          # 3. Write Hook.java (appends armeabi-v7a and armeabi to param.args[1])
           cat << 'EOF' > src/com/example/abibypass/Hook.java
           package com.example.abibypass;
 
@@ -128,18 +129,19 @@ jobs:
           }
           EOF
 
-          # 4. Compile stubs first, then compile Hook.java against stubs (stubs are NOT packaged into DEX)
+          # 4. Compile Java -> classes.dex
           javac --release 11 -d build/stubs $(find stubs -name "*.java")
           javac --release 11 -cp "$PLATFORM_JAR:build/stubs" -d build/app src/com/example/abibypass/Hook.java
           d8 --lib "$PLATFORM_JAR" --output build build/app/com/example/abibypass/*.class
 
-          # 5. Package resources, merge DEX, and sign APK
+          # 5. Package resources, store classes.dex uncompressed (-0), zipalign, and sign
           aapt2 compile --dir res -o build/res.zip
           aapt2 link -I "$PLATFORM_JAR" --manifest AndroidManifest.xml -A assets build/res.zip -o build/unsigned.apk
-          cd build && zip -uj unsigned.apk classes.dex && cd ..
+          cd build && zip -0 -uj unsigned.apk classes.dex && cd ..
+          zipalign -p -f 4 build/unsigned.apk build/aligned.apk
 
           keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-          apksigner sign --ks debug.keystore --ks-pass pass:android --out abibypass.apk build/unsigned.apk
+          apksigner sign --ks debug.keystore --ks-pass pass:android --out abibypass.apk build/aligned.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
