@@ -16,13 +16,53 @@ jobs:
 
       - name: Build and Sign APK
         run: |
+          set -e
           BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
           PLATFORM_JAR=$(ls $ANDROID_HOME/platforms/android-*/android.jar | sort -V | tail -n 1)
           export PATH="$PATH:$BUILD_TOOLS"
 
-          mkdir -p src/com/example/abibypass assets res/values build
-          wget -q https://maven.org -O api-82.jar
+          mkdir -p src/com/example/abibypass stubs/de/robv/android/xposed/callbacks assets res/values build/stubs build/app
 
+          # 1. Create compile-time Xposed API stubs (provided by LSPosed at runtime)
+          cat << 'EOF' > stubs/de/robv/android/xposed/IXposedHookLoadPackage.java
+          package de.robv.android.xposed;
+          import de.robv.android.xposed.callbacks.XC_LoadPackage;
+          public interface IXposedHookLoadPackage {
+              void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable;
+          }
+          EOF
+
+          cat << 'EOF' > stubs/de/robv/android/xposed/callbacks/XC_LoadPackage.java
+          package de.robv.android.xposed.callbacks;
+          public abstract class XC_LoadPackage {
+              public static final class LoadPackageParam {
+                  public String packageName;
+                  public ClassLoader classLoader;
+              }
+          }
+          EOF
+
+          cat << 'EOF' > stubs/de/robv/android/xposed/XC_MethodHook.java
+          package de.robv.android.xposed;
+          public abstract class XC_MethodHook {
+              public static final class MethodHookParam {
+                  public Object[] args;
+              }
+              protected void beforeHookedMethod(MethodHookParam param) throws Throwable {}
+              protected void afterHookedMethod(MethodHookParam param) throws Throwable {}
+          }
+          EOF
+
+          cat << 'EOF' > stubs/de/robv/android/xposed/XposedHelpers.java
+          package de.robv.android.xposed;
+          public final class XposedHelpers {
+              public static Object findAndHookMethod(String className, ClassLoader classLoader, String methodName, Object... parameterTypesAndCallback) {
+                  return null;
+              }
+          }
+          EOF
+
+          # 2. Create AndroidManifest.xml, scope array, and xposed_init
           cat << 'EOF' > AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://android.com"
@@ -49,6 +89,7 @@ jobs:
 
           echo "com.example.abibypass.Hook" > assets/xposed_init
 
+          # 3. Write Hook.java (appends armeabi-v7a and armeabi to supportedAbis at param.args[1])
           cat << 'EOF' > src/com/example/abibypass/Hook.java
           package com.example.abibypass;
 
@@ -87,9 +128,12 @@ jobs:
           }
           EOF
 
-          javac -source 11 -target 11 -cp "$PLATFORM_JAR:api-82.jar" -d build src/com/example/abibypass/Hook.java
-          d8 --lib "$PLATFORM_JAR" --output build build/com/example/abibypass/*.class
+          # 4. Compile stubs first, then compile Hook.java against stubs (stubs are NOT packaged into DEX)
+          javac --release 11 -d build/stubs $(find stubs -name "*.java")
+          javac --release 11 -cp "$PLATFORM_JAR:build/stubs" -d build/app src/com/example/abibypass/Hook.java
+          d8 --lib "$PLATFORM_JAR" --output build build/app/com/example/abibypass/*.class
 
+          # 5. Package resources, merge DEX, and sign APK
           aapt2 compile --dir res -o build/res.zip
           aapt2 link -I "$PLATFORM_JAR" --manifest AndroidManifest.xml -A assets build/res.zip -o build/unsigned.apk
           cd build && zip -uj unsigned.apk classes.dex && cd ..
